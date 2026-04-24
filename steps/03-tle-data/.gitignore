@@ -14,8 +14,3 @@ dist/
 .vscode/
 .idea/
 *.log
-
-# Personal AI instruction symlinks (not for this repo)
-AGENTS.md
-CLAUDE.md
-.github/copilot-instructions.md
