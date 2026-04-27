@@ -103,8 +103,6 @@ VITE_CESIUM_ION_TOKEN=your_token_here
 
 Also add a **`.env.example`** (commit this) and add `.env` to `.gitignore`.
 
-> **Screenshot** → `part-1-ion-token-page.png` — the ion tokens page. **Blur or crop the token value before saving.**
-
 ![Cesium ion tokens page](tutorial-assets/part-1-ion-token-page.png)
 
 > **Why the `VITE_` prefix?** Vite only exposes env vars prefixed with `VITE_`
@@ -115,8 +113,6 @@ Run it:
 ```bash
 npm run dev
 ```
-
-> **Screenshot** → `part-1-vite-running.png` — terminal showing `npm run dev` output with the local URL.
 
 ![Vite running](tutorial-assets/part-1-vite-running.png)
 
@@ -152,8 +148,6 @@ const viewer = new Viewer('cesiumContainer', {
 ```
 
 Reload. You should see Cesium's default tilted view of Earth.
-
-> **Screenshot** → `part-2-globe.png` — default blue Cesium globe in the browser, tilted home view, no entities yet.
 
 ![Hello globe](tutorial-assets/part-2-globe.png)
 
@@ -275,8 +269,6 @@ viewer.trackedEntity = iss;
 
 Reload and you should see a glowing cyan ring around Earth.
 
-> **Screenshot** → `part-5-orbit-ring.png` — full cyan glowing orbit loop around the globe.
-
 ![Orbit ring](tutorial-assets/part-5-orbit-ring.png)
 
 > `leadTime` / `trailTime` control how far into the future/past the path is
@@ -299,21 +291,15 @@ downloaded as glTF.
 
 1. Open [ion.cesium.com](https://ion.cesium.com/) → **My Assets**.
 
-   > **Screenshot** → `part-6-ion-my-assets.png` — ion **My Assets** page.
-
    ![My Assets](tutorial-assets/part-6-ion-my-assets.png)
 
 2. Drag and drop your `.gltf` / `.glb` onto the page (or click **Add data** →
    **3D Model**).
 
-   > **Screenshot** → `part-6-ion-add-data.png` — drag-and-drop upload area (or the **Add data** dialog).
-
    ![Add data dropdown](tutorial-assets/part-6-ion-add-data.gif)
 
 3. Wait for tiling to finish, then open the asset. The **Asset ID** at the
    top of the detail page is the number you need.
-
-   > **Screenshot** → `part-6-ion-asset-detail.png` — asset detail page. Highlight the **Asset ID** number.
 
    ![Asset detail](tutorial-assets/part-6-ion-asset-detail.png)
 
@@ -351,8 +337,6 @@ the direction of travel — no quaternion math.
 
 `minimumPixelSize: 64` keeps the ISS visible even when the camera is far away,
 which is almost always (it's ~400 km up).
-
-> **Screenshot** → `part-6-model-on-orbit.png` — browser view with the ISS 3D model visible on the orbit ring.
 
 ![Model on orbit](tutorial-assets/part-6-model-on-orbit.png)
 
@@ -398,8 +382,6 @@ viewer.camera.flyTo({
 Multiplying the Earth→ISS vector by 1.5 puts us 0.5× the ISS altitude beyond
 it, looking toward Earth.
 
-> **Screenshot** → `part-7-tracked.png` — camera near the ISS with the animation widget + timeline visible at the bottom.
-
 ![Clock running](tutorial-assets/part-7-tracked.png)
 
 You now have the default Cesium animation widget (bottom-left) and timeline
@@ -410,8 +392,6 @@ at 1×, but at 60× you can watch a full pass in about a minute and a half.
 > then click the small **camera icon** next to its title. Cesium will lock the
 > camera onto the entity so you can orbit around the model and see it up
 > close as it flies.
-
-> **Screenshot** → `part-7-track-button.png` — info box with the track (camera) button highlighted.
 
 ![Click the track button to follow the ISS](tutorial-assets/part-7-track-button.png)
 
@@ -463,8 +443,6 @@ viewer.selectedEntity = iss;
 
 Reload. You should see live lat/lon/altitude/speed in the top-right, updating
 as the ISS moves. Speed hovers around 7.66 km/s.
-
-> **Screenshot** → `part-8-overlay.png` — final app with Cesium's info box (top-right) showing live lat/lon/alt/speed.
 
 ![Info box](tutorial-assets/part-8-overlay.png)
 
