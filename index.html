@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ISS Live Tracker</title>
+    <!--
+      Tell Cesium where to find its static assets (workers, imagery, widgets CSS).
+      %BASE_URL% is replaced by Vite at build time with the configured base path,
+      so this works correctly both locally (/) and on GitHub Pages (/cesium-iss-tutorial/).
+    -->
+    <script>window.CESIUM_BASE_URL = "%BASE_URL%Cesium/";</script>
   </head>
   <body>
     <div id="cesiumContainer"></div>
