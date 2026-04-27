@@ -4,7 +4,7 @@ In this tutorial you'll build a small web app that renders the International
 Space Station orbiting Earth in real time — orbit path, 3D model, live
 telemetry, and playback controls — all with [CesiumJS](https://cesium.com/platform/cesiumjs/).
 
-![Finished app](tutorial-assets/part-8-overlay.png)
+![Finished app](tutorial-assets/ISS-Tracker-Tutoral_completed.png)
 
 **You'll learn how to:**
 
@@ -308,7 +308,7 @@ downloaded as glTF.
 
    > **Screenshot** → `part-6-ion-add-data.png` — drag-and-drop upload area (or the **Add data** dialog).
 
-   ![Add data dropdown](tutorial-assets/part-6-ion-add-data.png)
+   ![Add data dropdown](tutorial-assets/part-6-ion-add-data.gif)
 
 3. Wait for tiling to finish, then open the asset. The **Asset ID** at the
    top of the detail page is the number you need.
@@ -405,6 +405,15 @@ it, looking toward Earth.
 You now have the default Cesium animation widget (bottom-left) and timeline
 (bottom). Try bumping the speed up — the ISS does a full orbit in 93 minutes
 at 1×, but at 60× you can watch a full pass in about a minute and a half.
+
+> **Tip — get up close to the model:** click the ISS to open the info box,
+> then click the small **camera icon** next to its title. Cesium will lock the
+> camera onto the entity so you can orbit around the model and see it up
+> close as it flies.
+
+> **Screenshot** → `part-7-track-button.png` — info box with the track (camera) button highlighted.
+
+![Click the track button to follow the ISS](tutorial-assets/part-7-track-button.png)
 
 ---
 
