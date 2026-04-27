@@ -56,7 +56,7 @@ export function sampleIssOrbit(tle, startTime, durationSeconds, stepSeconds) {
     const cartesian = Cartesian3.fromRadians(
       geo.longitude,
       geo.latitude,
-      geo.height * 1000
+      geo.height * 1000.0
     );
     positions.addSample(time, cartesian);
   }

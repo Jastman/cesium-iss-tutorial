@@ -49,14 +49,15 @@ const positions = sampleIssOrbit(ISS_TLE, start, 93 * 60, 10);
 
 // Tell the viewer's clock which time range our samples cover. Without this,
 // Cesium might ask the property for a time it doesn't have data for.
-viewer.clock.startTime = start.clone();
-viewer.clock.stopTime = stop.clone();
-viewer.clock.currentTime = start.clone();
+const clock = viewer.clock;
+clock.startTime = start.clone();
+clock.stopTime = stop.clone();
+clock.currentTime = start.clone();
 // Loop the orbit when we hit the end of our sample window, and run in real
 // time (1 simulated second per wall-clock second — the ISS travels ~7.66 km/s).
-viewer.clock.clockRange = ClockRange.LOOP_STOP;
-viewer.clock.multiplier = 1;
-viewer.clock.shouldAnimate = true;
+clock.clockRange = ClockRange.LOOP_STOP;
+clock.multiplier = 1.0;
+clock.shouldAnimate = true;
 
 // Align the timeline widget to our sample window so the user can scrub through
 // the whole orbit.
@@ -83,7 +84,7 @@ const iss = viewer.entities.add({
     uri: await IonResource.fromAssetId(ISS_ION_ASSET_ID),
     // Ensure the satellite is always visible, even from far away.
     minimumPixelSize: 64,
-    maximumScale: 20_000,
+    maximumScale: 20_000.0,
   },
   path: {
     resolution: 120, // seconds between sampled path vertices
@@ -109,7 +110,7 @@ viewer.camera.flyTo({
     1.5, // pull the camera out along the Earth→ISS vector
     new Cartesian3()
   ),
-  duration: 0,
+  duration: 0.0,
 });
 
 // --- Live info box ----------------------------------------------------------
@@ -123,6 +124,8 @@ viewer.camera.flyTo({
 const scratchCurrent = new Cartesian3();
 const scratchNext = new Cartesian3();
 const scratchCarto = new Cartographic();
+// Reused every frame to avoid allocating a new JulianDate in the hot path.
+const scratchJulianDate = new JulianDate();
 
 iss.description = new CallbackProperty((time) => {
   const current = iss.position.getValue(time, scratchCurrent);
@@ -134,7 +137,7 @@ iss.description = new CallbackProperty((time) => {
   const altKm = (scratchCarto.height / 1000).toFixed(1);
 
   // Speed ≈ |Δposition| over 1 s of simulated time.
-  const oneSecondLater = JulianDate.addSeconds(time, 1, new JulianDate());
+  const oneSecondLater = JulianDate.addSeconds(time, 1.0, scratchJulianDate);
   const next = iss.position.getValue(oneSecondLater, scratchNext);
   const speedKmS = next
     ? (Cartesian3.distance(current, next) / 1000).toFixed(2)
