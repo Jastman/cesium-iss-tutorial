@@ -19,3 +19,6 @@ dist/
 AGENTS.md
 CLAUDE.md
 .github/copilot-instructions.md
+
+# Local screenshot sandbox (per-part scenes for capturing tutorial images)
+screenshots/
