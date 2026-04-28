@@ -12,6 +12,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write # needed to delete stale github-pages artifacts
 
 # Only allow one deployment at a time; cancel in-progress runs on new pushes.
 concurrency:
@@ -44,6 +45,15 @@ jobs:
           VITE_CESIUM_ION_TOKEN: ${{ secrets.VITE_CESIUM_ION_TOKEN }}
           # Tells vite.config.js to use /cesium-iss-tutorial/ as the base path.
           GITHUB_ACTIONS: "true"
+
+      - name: Delete stale github-pages artifacts
+        # Prevents "Multiple artifacts named github-pages" errors on re-runs.
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq '.artifacts[] | select(.name == "github-pages") | .id' | \
+            xargs -r -I{} gh api repos/${{ github.repository }}/actions/artifacts/{} -X DELETE
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
