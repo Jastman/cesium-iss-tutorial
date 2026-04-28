@@ -1,0 +1,65 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - "tutorial/iss-tracker"
+  workflow_dispatch: # allow manual trigger from the Actions tab
+
+# Required permissions for the deploy-pages action.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: write # needed to delete stale github-pages artifacts
+
+# Only allow one deployment at a time; cancel in-progress runs on new pushes.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # Add VITE_CESIUM_ION_TOKEN in GitHub → Settings → Secrets and variables
+          # → Actions → Repository secrets.
+          VITE_CESIUM_ION_TOKEN: ${{ secrets.VITE_CESIUM_ION_TOKEN }}
+          # Tells vite.config.js to use /cesium-iss-tutorial/ as the base path.
+          GITHUB_ACTIONS: "true"
+
+      - name: Delete stale github-pages artifacts
+        # Prevents "Multiple artifacts named github-pages" errors on re-runs.
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq '.artifacts[] | select(.name == "github-pages") | .id' | \
+            xargs -r -I{} gh api repos/${{ github.repository }}/actions/artifacts/{} -X DELETE
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
