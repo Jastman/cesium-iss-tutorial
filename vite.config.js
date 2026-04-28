@@ -5,10 +5,9 @@ import cesium from 'vite-plugin-cesium';
 // Copy .env.example to .env and add your Cesium ion token.
 export default defineConfig({
   plugins: [cesium()],
-  // Use the repo name as the base path when building for GitHub Pages so
-  // asset URLs are correct. Locally (no GITHUB_ACTIONS env var) keep '/'
-  // so the dev server works without any path prefix.
-  base: process.env.GITHUB_ACTIONS ? '/cesium-iss-tutorial/' : '/',
+  // Relative base so asset URLs work on any path prefix (local dev server
+  // and GitHub Pages alike — no need to hard-code the repo name here).
+  base: './',
   // Allow top-level await. Modern evergreen browsers all support it.
   build: { target: 'esnext' },
 });
