@@ -1,3 +1,5 @@
-# cesium-iss-tutorial
+# Cesium ISS Tutorial
 
-Tutorial repo. Content pending review on `tutorial/iss-tracker`.
+This repository now includes a beginner-first, step-by-step CesiumJS 101 tutorial for building an ISS live tracker from scratch.
+
+- Start here: [TUTORIAL.md](./TUTORIAL.md)
