@@ -320,6 +320,8 @@ Now you should see a glowing orbit ring around Earth.
 4. Unzip the downloaded file — you'll have a folder containing a `.gltf` file and supporting textures
 
 > **Can't find the Download button?** You must be logged in to Sketchfab. The button appears on the right side of the model page once signed in.
+>
+> **Automation note:** Sketchfab can show anti-bot/CAPTCHA checks in automated environments. If that happens, complete this download manually in your normal browser session.
 
 ### Step 7b — Upload to Cesium ion
 
@@ -328,6 +330,8 @@ Now you should see a glowing orbit ring around Earth.
 3. Drag the entire unzipped model folder (or select all files inside it) and upload
 4. Wait for processing to complete (usually a minute or two)
 5. Copy the **Asset ID** shown on the asset detail page (a number like `1234567`)
+
+> **If Sketchfab download is temporarily blocked:** You can still validate all downstream Cesium ion upload + app wiring steps with any local glTF model folder (a `.gltf` plus its textures/buffers). Then swap to the ISS model once Sketchfab access works.
 
 ### Step 7c — Wire it into the app
 
@@ -387,13 +391,22 @@ if (!Number.isInteger(ISS_ION_ASSET_ID) || ISS_ION_ASSET_ID <= 0) {
   );
 }
 
+let issModelUri;
+try {
+  issModelUri = await IonResource.fromAssetId(ISS_ION_ASSET_ID);
+} catch (error) {
+  throw new Error(
+    `Failed to load ion model asset ${ISS_ION_ASSET_ID}. Verify the asset ID, token scope, and that processing finished. Original error: ${error}`
+  );
+}
+
 const iss = viewer.entities.add({
   id: 'iss',
   name: ISS_TLE.name,
   position: positions,
   orientation: new VelocityOrientationProperty(positions),
   model: {
-    uri: await IonResource.fromAssetId(ISS_ION_ASSET_ID),
+    uri: issModelUri,
     minimumPixelSize: 64,
     maximumScale: 20_000.0,
   },
@@ -410,10 +423,12 @@ const iss = viewer.entities.add({
 });
 
 const issStart = iss.position.getValue(start);
-viewer.camera.flyTo({
-  destination: Cartesian3.multiplyByScalar(issStart, 1.5, new Cartesian3()),
-  duration: 0.0,
-});
+if (issStart) {
+  viewer.camera.flyTo({
+    destination: Cartesian3.multiplyByScalar(issStart, 1.5, new Cartesian3()),
+    duration: 0.0,
+  });
+}
 
 const scratchCurrent = new Cartesian3();
 const scratchNext = new Cartesian3();
@@ -486,6 +501,7 @@ The `dist/` folder is static and can be hosted on GitHub Pages, Netlify, Cloudfl
 2. **Model not appearing**: Confirm `ISS_ION_ASSET_ID` exists in your ion account and finished processing
 3. **Orbit looks wrong**: Ensure TLE lines are unmodified and complete
 4. **Path but no animation**: Confirm `viewer.clock.shouldAnimate = true`
+5. **Sketchfab download blocked**: Complete login/CAPTCHA manually in your browser, or use any local glTF folder temporarily to finish ion upload + app wiring
 
 ---
 
