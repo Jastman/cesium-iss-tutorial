@@ -1,109 +1,108 @@
 import {
   Cartesian3,
+  Cartographic,
   JulianDate,
-  LagrangePolynomialApproximation,
+  Math as CesiumMath,
   Matrix3,
+  Quaternion,
   SampledPositionProperty,
-  Transforms,
 } from 'cesium';
+import {
+  eciToGeodetic,
+  gstime,
+  propagate,
+  twoline2satrec,
+} from 'satellite.js';
 
-export const NASA_OEM_URL =
-  'https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.txt';
-export const NASA_OEM_PROXY_PATH = '/api/nasa-iss-oem';
-
+export const CELESTRAK_TLE_URL =
+  'https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE';
 export const OPEN_NOTIFY_URL = 'http://api.open-notify.org/iss-now.json';
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
+const TLE_PROXY_PATH = '/api/iss-tle';
+const LIVE_POSITION_PROXY_PATH = '/api/iss-now';
+const ISS_ORBIT_SECONDS = 93 * 60;
+const SAMPLE_STEP_SECONDS = 15;
+const PHASE_SEARCH_STEP_SECONDS = 10;
 
-export async function loadIssTrajectory() {
-  let response;
-  try {
-    response = await fetch(NASA_OEM_PROXY_PATH);
-  } catch {
-    response = undefined;
-  }
+export async function loadIssData() {
+  const [tleText, livePosition] = await Promise.all([
+    fetchText(TLE_PROXY_PATH, 'CelesTrak ISS TLE'),
+    fetchJson(LIVE_POSITION_PROXY_PATH, 'Open Notify live ISS position'),
+  ]);
 
-  if (!response || !response.ok) {
-    // Fallback for environments without the Vite proxy (e.g., server-side tooling).
-    response = await fetch(NASA_OEM_URL);
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to load NASA trajectory data (${response.status} ${response.statusText}).`
-    );
-  }
-
-  return parseIssOem(await response.text());
+  return createCalibratedTrajectory(tleText, livePosition);
 }
 
-export function parseIssOem(text) {
-  // Use default (FIXED/ECEF) reference frame — we convert ECI→ECEF ourselves below.
+async function fetchText(url, label) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${label} request failed (${response.status} ${response.statusText}).`);
+  }
+  return response.text();
+}
+
+async function fetchJson(url, label) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${label} request failed (${response.status} ${response.statusText}).`);
+  }
+  return response.json();
+}
+
+export function createCalibratedTrajectory(tleText, livePayload) {
+  const { name, satrec } = parseTle(tleText);
+  const live = parseLivePosition(livePayload);
+  const liveDate = new Date(live.timestamp * 1000);
+
+  const phaseOffsetSeconds = findBestPhaseOffset(satrec, liveDate, live);
+  const predictedNow = propagateToFixed(
+    satrec,
+    new Date(liveDate.getTime() + phaseOffsetSeconds * 1000)
+  );
+  const liveNow = Cartesian3.fromDegrees(
+    live.longitude,
+    live.latitude,
+    cartographicHeight(predictedNow)
+  );
+  const calibration = rotationBetween(predictedNow, liveNow);
+
   const positions = new SampledPositionProperty();
-  positions.setInterpolationOptions({
-    interpolationAlgorithm: LagrangePolynomialApproximation,
-    interpolationDegree: 5,
-  });
+  const startTime = JulianDate.addSeconds(
+    JulianDate.fromDate(liveDate),
+    -ISS_ORBIT_SECONDS / 2,
+    new JulianDate()
+  );
+  const stopTime = JulianDate.addSeconds(
+    JulianDate.fromDate(liveDate),
+    ISS_ORBIT_SECONDS / 2,
+    new JulianDate()
+  );
 
-  let creationDate;
-  let startTime;
-  let stopTime;
   let sampleCount = 0;
-  let skippedCount = 0;
-
-  const eciVec = new Cartesian3();
-  const ecefVec = new Cartesian3();
-
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    if (line.startsWith('CREATION_DATE')) {
-      creationDate = line.split('=').at(1)?.trim();
-      continue;
-    }
-
-    if (!/^\d{4}-\d{2}-\d{2}T/.test(line)) continue;
-
-    const [timestamp, xKm, yKm, zKm] = line.split(/\s+/);
-    const time = JulianDate.fromIso8601(timestamp);
-
-    // NASA OEM is in EME2000 (J2000-like) inertial frame.
-    // Convert to Earth-fixed (ECEF) so Cesium draws the path over the rotating Earth.
-    Cartesian3.fromElements(
-      Number(xKm) * 1000.0,
-      Number(yKm) * 1000.0,
-      Number(zKm) * 1000.0,
-      eciVec
+  for (
+    let seconds = -ISS_ORBIT_SECONDS / 2;
+    seconds <= ISS_ORBIT_SECONDS / 2;
+    seconds += SAMPLE_STEP_SECONDS
+  ) {
+    const displayDate = new Date(liveDate.getTime() + seconds * 1000);
+    const sourceDate = new Date(
+      displayDate.getTime() + phaseOffsetSeconds * 1000
+    );
+    const predicted = propagateToFixed(satrec, sourceDate);
+    const calibrated = Matrix3.multiplyByVector(
+      calibration,
+      predicted,
+      new Cartesian3()
     );
 
-    const toFixed = Transforms.computeIcrfToFixedMatrix(time);
-    if (!toFixed) {
-      // ICRF→fixed matrix unavailable for this epoch — skip sample.
-      skippedCount += 1;
-      continue;
-    }
-
-    Matrix3.multiplyByVector(toFixed, eciVec, ecefVec);
-    positions.addSample(time, ecefVec.clone());
-
-    if (!startTime) {
-      startTime = time.clone();
-    }
-    stopTime = time.clone();
+    positions.addSample(JulianDate.fromDate(displayDate), calibrated);
     sampleCount += 1;
   }
 
-  if (!startTime || !stopTime || sampleCount === 0) {
-    throw new Error('NASA OEM file did not contain any usable trajectory samples.');
-  }
-
-  if (skippedCount > 0) {
-    console.warn(`parseIssOem: skipped ${skippedCount} samples (ICRF matrix unavailable).`);
-  }
-
   return {
-    creationDate,
+    live,
+    name,
+    phaseOffsetSeconds,
     positions,
     sampleCount,
     startTime,
@@ -111,50 +110,118 @@ export function parseIssOem(text) {
   };
 }
 
-export async function fetchIssNowSnapshot() {
-  const isLocalHttp =
-    typeof window !== 'undefined' &&
-    window.location.protocol === 'http:' &&
-    LOCAL_HOSTS.has(window.location.hostname);
+function parseTle(tleText) {
+  const lines = tleText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 
-  if (!isLocalHttp) {
-    return {
-      available: false,
-      reason:
-        'Open Notify is HTTP-only, so it is disabled on HTTPS deployments. The app still uses NASA trajectory data.',
-      source: 'Open Notify',
-    };
+  if (lines.length < 3 || !lines[1].startsWith('1 ') || !lines[2].startsWith('2 ')) {
+    throw new Error('CelesTrak did not return a valid three-line ISS TLE.');
   }
 
-  const response = await fetch(OPEN_NOTIFY_URL);
-  if (!response.ok) {
-    throw new Error(
-      `Open Notify request failed (${response.status} ${response.statusText}).`
-    );
+  const satrec = twoline2satrec(lines[1], lines[2]);
+  if (satrec.error !== 0) {
+    throw new Error(`Could not parse the ISS TLE (satellite.js error ${satrec.error}).`);
   }
 
-  const data = await response.json();
-  if (data.message !== 'success') {
-    throw new Error('Open Notify did not return a success payload.');
-  }
-
-  return {
-    available: true,
-    latitude: Number(data.iss_position.latitude),
-    longitude: Number(data.iss_position.longitude),
-    source: 'Open Notify',
-    timestamp: Number(data.timestamp),
-  };
+  return { name: lines[0], satrec };
 }
 
-export function clampJulianDate(time, startTime, stopTime) {
-  if (JulianDate.lessThan(time, startTime)) {
-    return startTime.clone();
+function parseLivePosition(payload) {
+  const latitude = Number(payload?.iss_position?.latitude);
+  const longitude = Number(payload?.iss_position?.longitude);
+  const timestamp = Number(payload?.timestamp);
+
+  if (
+    payload?.message !== 'success' ||
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    !Number.isFinite(timestamp)
+  ) {
+    throw new Error('Open Notify returned an invalid live ISS position.');
   }
 
-  if (JulianDate.greaterThan(time, stopTime)) {
-    return stopTime.clone();
+  return { latitude, longitude, timestamp };
+}
+
+function findBestPhaseOffset(satrec, liveDate, live) {
+  const target = Cartesian3.normalize(
+    Cartesian3.fromDegrees(live.longitude, live.latitude),
+    new Cartesian3()
+  );
+  let bestOffset = 0;
+  let bestAngle = Number.POSITIVE_INFINITY;
+
+  for (
+    let offset = -ISS_ORBIT_SECONDS / 2;
+    offset <= ISS_ORBIT_SECONDS / 2;
+    offset += PHASE_SEARCH_STEP_SECONDS
+  ) {
+    const candidate = propagateToFixed(
+      satrec,
+      new Date(liveDate.getTime() + offset * 1000)
+    );
+    const angle = angularDistance(candidate, target);
+    if (angle < bestAngle) {
+      bestAngle = angle;
+      bestOffset = offset;
+    }
   }
 
-  return time.clone();
+  for (let offset = bestOffset - 10; offset <= bestOffset + 10; offset += 0.25) {
+    const candidate = propagateToFixed(
+      satrec,
+      new Date(liveDate.getTime() + offset * 1000)
+    );
+    const angle = angularDistance(candidate, target);
+    if (angle < bestAngle) {
+      bestAngle = angle;
+      bestOffset = offset;
+    }
+  }
+
+  return bestOffset;
+}
+
+function propagateToFixed(satrec, date) {
+  const state = propagate(satrec, date);
+  if (!state.position || typeof state.position === 'boolean') {
+    throw new Error(`SGP4 could not propagate the ISS position at ${date.toISOString()}.`);
+  }
+
+  const geodetic = eciToGeodetic(state.position, gstime(date));
+  return Cartesian3.fromRadians(
+    geodetic.longitude,
+    geodetic.latitude,
+    geodetic.height * 1000
+  );
+}
+
+function angularDistance(left, right) {
+  const leftUnit = Cartesian3.normalize(left, new Cartesian3());
+  const rightUnit = Cartesian3.normalize(right, new Cartesian3());
+  return Math.acos(
+    CesiumMath.clamp(Cartesian3.dot(leftUnit, rightUnit), -1, 1)
+  );
+}
+
+function rotationBetween(from, to) {
+  const fromUnit = Cartesian3.normalize(from, new Cartesian3());
+  const toUnit = Cartesian3.normalize(to, new Cartesian3());
+  const axis = Cartesian3.cross(fromUnit, toUnit, new Cartesian3());
+  const axisLength = Cartesian3.magnitude(axis);
+
+  if (axisLength < CesiumMath.EPSILON12) {
+    return Matrix3.clone(Matrix3.IDENTITY);
+  }
+
+  Cartesian3.divideByScalar(axis, axisLength, axis);
+  const angle = angularDistance(fromUnit, toUnit);
+  const quaternion = Quaternion.fromAxisAngle(axis, angle);
+  return Matrix3.fromQuaternion(quaternion);
+}
+
+function cartographicHeight(position) {
+  return Cartographic.fromCartesian(position).height;
 }

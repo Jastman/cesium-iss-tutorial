@@ -1,62 +1,62 @@
-# CesiumJS 101: Build an ISS Live Tracker
+# Build a Live ISS Tracker with CesiumJS
 
-This tutorial walks you from zero setup to a working CesiumJS app that shows the International Space Station orbiting Earth in real time.
+In this beginner CesiumJS tutorial, you will build a 3D globe that:
 
-You will build:
-1. A Cesium globe in the browser
-2. A time-dynamic ISS orbit using TLE data + SGP4 propagation
-3. A glowing orbit path
-4. A 3D ISS model loaded from Cesium ion
-5. A live info panel with latitude, longitude, altitude, and speed
+- places a Cesium ion-hosted 3D ISS model at its verified live location;
+- draws a smooth ISS orbit around Earth;
+- animates the station at real speed; and
+- displays its latitude, longitude, altitude, speed, and data sources.
 
-Estimated time: **45-60 minutes**
+The finished app uses:
 
----
+- **CesiumJS** for the globe, clock, camera, entity, model, and path;
+- **Cesium ion** to host and stream the ISS glTF/GLB model;
+- **Open Notify** as the live latitude/longitude anchor;
+- **CelesTrak** for the current ISS two-line element set (TLE); and
+- **satellite.js** to propagate the orbit with the SGP4 model.
 
-## 1. Prerequisites (starting from zero)
+The app calibrates the propagated orbit to the live position before creating
+Cesium samples. It never inserts a live point into an existing interpolated
+path, which would create large spikes and impossible speeds.
 
-You need:
-1. **Node.js 18+** (LTS recommended): https://nodejs.org
-2. **A code editor** (VS Code recommended): https://code.visualstudio.com
-3. **A free Cesium ion account**: https://ion.cesium.com
-4. **A free Sketchfab account** (for downloading the ISS model): https://sketchfab.com
-5. **Basic web dev familiarity** (HTML, JS, terminal commands)
+## What you need
 
-**Which terminal to use:**
-- **Windows:** Use **Windows Terminal** with **PowerShell** (not Command Prompt). Windows Terminal is available from the Microsoft Store — install it if you don't have it.
-- **macOS:** Use the built-in **Terminal** app, or iTerm2.
+Install these before starting:
 
-Optional but useful:
-1. Git
+1. [Node.js](https://nodejs.org/) 20 LTS or newer. Node includes npm.
+2. A code editor such as [Visual Studio Code](https://code.visualstudio.com/).
+3. A modern browser such as Chrome, Edge, or Firefox.
+4. A free [Cesium ion account](https://ion.cesium.com/).
+5. An ISS model in glTF or GLB format. The
+   [ISS model on Sketchfab](https://sketchfab.com/3d-models/international-space-station-iss-3d-model-e9c8c0f42e144b6c897c8be85d245f3b)
+   is one possible source; follow its license and attribution requirements.
 
----
+You should already be comfortable creating files, running terminal commands,
+and reading basic JavaScript.
 
-## 2. Create the project
+## 1. Create the project
 
 Open a terminal and run:
 
-**Windows (PowerShell):**
+**Windows PowerShell**
+
 ```powershell
 mkdir iss-tracker
 cd iss-tracker
 npm init -y
-npm install cesium@1.122.0
-npm install --save-dev vite@5.4.10 vite-plugin-cesium@1.2.23
+mkdir src
 ```
 
-**macOS / Linux:**
+**macOS or Linux**
+
 ```bash
 mkdir iss-tracker
 cd iss-tracker
 npm init -y
-npm install cesium@1.122.0
-npm install -D vite@5.4.10 vite-plugin-cesium@1.2.23
+mkdir src
 ```
 
-> We pin these package versions intentionally so everyone gets the same known-good result as this tutorial.
-> After replacing `package.json`, run `npm install` again so the `overrides` section is applied.
-
-Replace the **entire contents** of `package.json` with:
+Replace the entire generated `package.json` with:
 
 ```json
 {
@@ -70,7 +70,8 @@ Replace the **entire contents** of `package.json` with:
     "preview": "vite preview"
   },
   "dependencies": {
-    "cesium": "1.122.0"
+    "cesium": "1.122.0",
+    "satellite.js": "5.0.0"
   },
   "devDependencies": {
     "vite": "5.4.10",
@@ -82,44 +83,69 @@ Replace the **entire contents** of `package.json` with:
 }
 ```
 
-> Important: replace the full file (do not merge fields). In particular, make sure there is only one `"type"` key, and it is `"type": "module"`.
->
-> The `overrides` entry is required to avoid a Vite/Cesium zip.js compatibility issue (`Missing "./lib/zip-no-worker.js" specifier`).
-> Do **not** add `optimizeDeps.exclude` entries for Cesium packages in this tutorial; that can cause browser module errors like `mersenne-twister ... does not provide an export named 'default'`.
+Install the dependencies:
 
-Create `vite.config.js`:
+```bash
+npm install
+```
+
+The `@zip.js/zip.js` override is required by this pinned Cesium version. Do not
+replace it with a Vite `optimizeDeps.exclude` workaround; that can cause a
+`mersenne-twister` module error in the browser.
+
+## 2. Configure Vite and the data proxies
+
+Create `vite.config.js` in the project root:
 
 ```js
 import { defineConfig } from 'vite';
 import cesium from 'vite-plugin-cesium';
 
-const NASA_OEM_SOURCE_PATH = '/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.txt';
-
 export default defineConfig({
   plugins: [cesium()],
-  // NASA's OEM file does not send browser CORS headers.
-  // Proxying through Vite keeps Step 5/6 working in local dev and preview.
   server: {
     proxy: {
-      '/api/nasa-iss-oem': {
-        target: 'https://nasa-public-data.s3.amazonaws.com',
+      '/api/iss-tle': {
+        target: 'https://celestrak.org',
         changeOrigin: true,
-        rewrite: () => NASA_OEM_SOURCE_PATH,
+        rewrite: () => '/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE',
+      },
+      '/api/iss-now': {
+        target: 'http://api.open-notify.org',
+        changeOrigin: true,
+        rewrite: () => '/iss-now.json',
       },
     },
   },
   preview: {
     proxy: {
-      '/api/nasa-iss-oem': {
-        target: 'https://nasa-public-data.s3.amazonaws.com',
+      '/api/iss-tle': {
+        target: 'https://celestrak.org',
         changeOrigin: true,
-        rewrite: () => NASA_OEM_SOURCE_PATH,
+        rewrite: () => '/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE',
+      },
+      '/api/iss-now': {
+        target: 'http://api.open-notify.org',
+        changeOrigin: true,
+        rewrite: () => '/iss-now.json',
       },
     },
   },
-  build: { target: 'esnext' }, // allows top-level await
+  build: { target: 'esnext' },
 });
 ```
+
+Why use proxies?
+
+- Open Notify is HTTP-only, while browser apps are commonly served over HTTPS.
+- Public data services may not include browser CORS headers.
+- The app can consistently fetch `/api/iss-now` and `/api/iss-tle` from its own
+  origin during local development.
+
+For a production deployment, configure equivalent routes on your hosting
+platform or backend.
+
+## 3. Create the page and styles
 
 Create `index.html`:
 
@@ -138,17 +164,7 @@ Create `index.html`:
 </html>
 ```
 
-Create a `src` folder, then create `src/style.css`:
-
-**Windows (PowerShell):**
-```powershell
-mkdir src
-```
-
-**macOS / Linux:**
-```bash
-mkdir src
-```
+Create `src/style.css`:
 
 ```css
 html,
@@ -162,196 +178,165 @@ body,
 }
 ```
 
----
+## 4. Add your Cesium ion token safely
 
-## 3. Configure your Cesium ion token
+Open [Cesium ion Access Tokens](https://ion.cesium.com/tokens) and copy a token
+that can access your imagery and ISS model.
 
-1. In Cesium ion, go to **Access Tokens**: https://ion.cesium.com/tokens
-2. Copy your default token
-3. Create `.env` in the project root:
+Create `.env.example`:
 
-```env
+```dotenv
 VITE_CESIUM_ION_TOKEN=your_token_here
 ```
 
-4. Add `.env` to `.gitignore`. Open (or create) `.gitignore` in your editor and add a new line:
+Do **not** put your real token in `.env.example`. That file is safe to share and
+commit because it contains only a placeholder.
 
-```
-.env
-```
+Create your local `.env` file:
 
-5. Create `.env.example` in your editor:
+**Windows PowerShell**
 
-```env
-VITE_CESIUM_ION_TOKEN=your_token_here
-```
-
-Why `VITE_`? Vite only exposes env vars prefixed with `VITE_` to browser code.
-
----
-
-## 4. Render the Cesium globe
-
-Create `src/main.js`:
-
-```js
-import { Ion, Viewer } from 'cesium';
-import 'cesium/Build/Cesium/Widgets/widgets.css';
-import './style.css';
-
-const token = import.meta.env.VITE_CESIUM_ION_TOKEN;
-if (!token || token === 'your_token_here') {
-  throw new Error(
-    'Missing VITE_CESIUM_ION_TOKEN. Copy .env.example to .env and add your token.'
-  );
-}
-Ion.defaultAccessToken = token;
-
-const viewer = new Viewer('cesiumContainer', {
-  baseLayerPicker: false,
-  geocoder: false,
-  sceneModePicker: false,
-  navigationHelpButton: false,
-  homeButton: false,
-});
-```
-
-Run the app:
-
-**Windows (PowerShell):**
 ```powershell
-npm run dev
+Copy-Item .env.example .env
 ```
 
-**macOS / Linux:**
+**macOS or Linux**
+
 ```bash
-npm run dev
+cp .env.example .env
 ```
 
-> These npm commands are identical on all platforms — from here on, `npm run ...` commands work the same everywhere. Only file-system commands differ between platforms.
+Replace `your_token_here` in `.env` with your real token:
 
-You should now see Earth rendered in Cesium.
+```dotenv
+VITE_CESIUM_ION_TOKEN=your_actual_token
+```
 
----
+Create `.gitignore`:
 
-## 5. Load real ISS trajectory data from NASA
+```gitignore
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+.DS_Store
+*.log
+```
 
-The earlier globe was just Cesium itself. Now we will feed it **real ISS orbit data** from NASA.
+Vite reads environment variables only when it starts. Restart `npm run dev`
+after changing `.env`.
 
-NASA publishes the ISS trajectory as an Orbit Ephemeris Message (OEM) on the Spot the Station page:
-
-- Spot the Station: https://www.nasa.gov/spot-the-station/#TRAJECTORY
-- Current OEM text file: https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.txt
+## 5. Load and calibrate the ISS orbit
 
 Create `src/iss.js`:
 
 ```js
 import {
   Cartesian3,
+  Cartographic,
   JulianDate,
-  LagrangePolynomialApproximation,
+  Math as CesiumMath,
   Matrix3,
+  Quaternion,
   SampledPositionProperty,
-  Transforms,
 } from 'cesium';
+import {
+  eciToGeodetic,
+  gstime,
+  propagate,
+  twoline2satrec,
+} from 'satellite.js';
 
-export const NASA_OEM_URL =
-  'https://nasa-public-data.s3.amazonaws.com/iss-coords/current/ISS_OEM/ISS.OEM_J2K_EPH.txt';
-export const NASA_OEM_PROXY_PATH = '/api/nasa-iss-oem';
-
+export const CELESTRAK_TLE_URL =
+  'https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE';
 export const OPEN_NOTIFY_URL = 'http://api.open-notify.org/iss-now.json';
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
+const TLE_PROXY_PATH = '/api/iss-tle';
+const LIVE_POSITION_PROXY_PATH = '/api/iss-now';
+const ISS_ORBIT_SECONDS = 93 * 60;
+const SAMPLE_STEP_SECONDS = 15;
+const PHASE_SEARCH_STEP_SECONDS = 10;
 
-export async function loadIssTrajectory() {
-  let response;
-  try {
-    response = await fetch(NASA_OEM_PROXY_PATH);
-  } catch {
-    response = undefined;
-  }
+export async function loadIssData() {
+  const [tleText, livePosition] = await Promise.all([
+    fetchText(TLE_PROXY_PATH, 'CelesTrak ISS TLE'),
+    fetchJson(LIVE_POSITION_PROXY_PATH, 'Open Notify live ISS position'),
+  ]);
 
-  if (!response || !response.ok) {
-    // Fallback for environments without the Vite proxy (e.g., server-side tooling).
-    response = await fetch(NASA_OEM_URL);
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to load NASA trajectory data (${response.status} ${response.statusText}).`
-    );
-  }
-
-  return parseIssOem(await response.text());
+  return createCalibratedTrajectory(tleText, livePosition);
 }
 
-export function parseIssOem(text) {
-  // Use default (FIXED/ECEF) reference frame — we convert ECI→ECEF ourselves below.
+async function fetchText(url, label) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${label} request failed (${response.status} ${response.statusText}).`);
+  }
+  return response.text();
+}
+
+async function fetchJson(url, label) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${label} request failed (${response.status} ${response.statusText}).`);
+  }
+  return response.json();
+}
+
+export function createCalibratedTrajectory(tleText, livePayload) {
+  const { name, satrec } = parseTle(tleText);
+  const live = parseLivePosition(livePayload);
+  const liveDate = new Date(live.timestamp * 1000);
+
+  const phaseOffsetSeconds = findBestPhaseOffset(satrec, liveDate, live);
+  const predictedNow = propagateToFixed(
+    satrec,
+    new Date(liveDate.getTime() + phaseOffsetSeconds * 1000)
+  );
+  const liveNow = Cartesian3.fromDegrees(
+    live.longitude,
+    live.latitude,
+    cartographicHeight(predictedNow)
+  );
+  const calibration = rotationBetween(predictedNow, liveNow);
+
   const positions = new SampledPositionProperty();
-  positions.setInterpolationOptions({
-    interpolationAlgorithm: LagrangePolynomialApproximation,
-    interpolationDegree: 5,
-  });
+  const startTime = JulianDate.addSeconds(
+    JulianDate.fromDate(liveDate),
+    -ISS_ORBIT_SECONDS / 2,
+    new JulianDate()
+  );
+  const stopTime = JulianDate.addSeconds(
+    JulianDate.fromDate(liveDate),
+    ISS_ORBIT_SECONDS / 2,
+    new JulianDate()
+  );
 
-  let creationDate;
-  let startTime;
-  let stopTime;
   let sampleCount = 0;
-  let skippedCount = 0;
-
-  const eciVec = new Cartesian3();
-  const ecefVec = new Cartesian3();
-
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    if (line.startsWith('CREATION_DATE')) {
-      creationDate = line.split('=').at(1)?.trim();
-      continue;
-    }
-
-    if (!/^\d{4}-\d{2}-\d{2}T/.test(line)) continue;
-
-    const [timestamp, xKm, yKm, zKm] = line.split(/\s+/);
-    const time = JulianDate.fromIso8601(timestamp);
-
-    // NASA OEM is in EME2000 (J2000-like) inertial frame.
-    // Convert to Earth-fixed (ECEF) so Cesium draws the path over the rotating Earth.
-    Cartesian3.fromElements(
-      Number(xKm) * 1000.0,
-      Number(yKm) * 1000.0,
-      Number(zKm) * 1000.0,
-      eciVec
+  for (
+    let seconds = -ISS_ORBIT_SECONDS / 2;
+    seconds <= ISS_ORBIT_SECONDS / 2;
+    seconds += SAMPLE_STEP_SECONDS
+  ) {
+    const displayDate = new Date(liveDate.getTime() + seconds * 1000);
+    const sourceDate = new Date(
+      displayDate.getTime() + phaseOffsetSeconds * 1000
+    );
+    const predicted = propagateToFixed(satrec, sourceDate);
+    const calibrated = Matrix3.multiplyByVector(
+      calibration,
+      predicted,
+      new Cartesian3()
     );
 
-    const toFixed = Transforms.computeIcrfToFixedMatrix(time);
-    if (!toFixed) {
-      // ICRF→fixed matrix unavailable for this epoch — skip sample.
-      skippedCount += 1;
-      continue;
-    }
-
-    Matrix3.multiplyByVector(toFixed, eciVec, ecefVec);
-    positions.addSample(time, ecefVec.clone());
-
-    if (!startTime) {
-      startTime = time.clone();
-    }
-    stopTime = time.clone();
+    positions.addSample(JulianDate.fromDate(displayDate), calibrated);
     sampleCount += 1;
   }
 
-  if (!startTime || !stopTime || sampleCount === 0) {
-    throw new Error('NASA OEM file did not contain any usable trajectory samples.');
-  }
-
-  if (skippedCount > 0) {
-    console.warn(`parseIssOem: skipped ${skippedCount} samples (ICRF matrix unavailable).`);
-  }
-
   return {
-    creationDate,
+    live,
+    name,
+    phaseOffsetSeconds,
     positions,
     sampleCount,
     startTime,
@@ -359,204 +344,152 @@ export function parseIssOem(text) {
   };
 }
 
-export async function fetchIssNowSnapshot() {
-  const isLocalHttp =
-    typeof window !== 'undefined' &&
-    window.location.protocol === 'http:' &&
-    LOCAL_HOSTS.has(window.location.hostname);
+function parseTle(tleText) {
+  const lines = tleText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 
-  if (!isLocalHttp) {
-    return {
-      available: false,
-      reason:
-        'Open Notify is HTTP-only, so it is disabled on HTTPS deployments. The app still uses NASA trajectory data.',
-      source: 'Open Notify',
-    };
+  if (lines.length < 3 || !lines[1].startsWith('1 ') || !lines[2].startsWith('2 ')) {
+    throw new Error('CelesTrak did not return a valid three-line ISS TLE.');
   }
 
-  const response = await fetch(OPEN_NOTIFY_URL);
-  if (!response.ok) {
-    throw new Error(
-      `Open Notify request failed (${response.status} ${response.statusText}).`
+  const satrec = twoline2satrec(lines[1], lines[2]);
+  if (satrec.error !== 0) {
+    throw new Error(`Could not parse the ISS TLE (satellite.js error ${satrec.error}).`);
+  }
+
+  return { name: lines[0], satrec };
+}
+
+function parseLivePosition(payload) {
+  const latitude = Number(payload?.iss_position?.latitude);
+  const longitude = Number(payload?.iss_position?.longitude);
+  const timestamp = Number(payload?.timestamp);
+
+  if (
+    payload?.message !== 'success' ||
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    !Number.isFinite(timestamp)
+  ) {
+    throw new Error('Open Notify returned an invalid live ISS position.');
+  }
+
+  return { latitude, longitude, timestamp };
+}
+
+function findBestPhaseOffset(satrec, liveDate, live) {
+  const target = Cartesian3.normalize(
+    Cartesian3.fromDegrees(live.longitude, live.latitude),
+    new Cartesian3()
+  );
+  let bestOffset = 0;
+  let bestAngle = Number.POSITIVE_INFINITY;
+
+  for (
+    let offset = -ISS_ORBIT_SECONDS / 2;
+    offset <= ISS_ORBIT_SECONDS / 2;
+    offset += PHASE_SEARCH_STEP_SECONDS
+  ) {
+    const candidate = propagateToFixed(
+      satrec,
+      new Date(liveDate.getTime() + offset * 1000)
     );
+    const angle = angularDistance(candidate, target);
+    if (angle < bestAngle) {
+      bestAngle = angle;
+      bestOffset = offset;
+    }
   }
 
-  const data = await response.json();
-  if (data.message !== 'success') {
-    throw new Error('Open Notify did not return a success payload.');
+  for (let offset = bestOffset - 10; offset <= bestOffset + 10; offset += 0.25) {
+    const candidate = propagateToFixed(
+      satrec,
+      new Date(liveDate.getTime() + offset * 1000)
+    );
+    const angle = angularDistance(candidate, target);
+    if (angle < bestAngle) {
+      bestAngle = angle;
+      bestOffset = offset;
+    }
   }
 
-  return {
-    available: true,
-    latitude: Number(data.iss_position.latitude),
-    longitude: Number(data.iss_position.longitude),
-    source: 'Open Notify',
-    timestamp: Number(data.timestamp),
-  };
+  return bestOffset;
 }
 
-export function clampJulianDate(time, startTime, stopTime) {
-  if (JulianDate.lessThan(time, startTime)) {
-    return startTime.clone();
+function propagateToFixed(satrec, date) {
+  const state = propagate(satrec, date);
+  if (!state.position || typeof state.position === 'boolean') {
+    throw new Error(`SGP4 could not propagate the ISS position at ${date.toISOString()}.`);
   }
 
-  if (JulianDate.greaterThan(time, stopTime)) {
-    return stopTime.clone();
-  }
-
-  return time.clone();
-}
-```
-
-What this file does:
-1. Downloads NASA's current ISS trajectory file via the Vite proxy (to avoid CORS)
-2. Parses the trajectory samples from EME2000 inertial coordinates into Earth-fixed (ECEF) using `Transforms.computeIcrfToFixedMatrix()` + `Matrix3.multiplyByVector()` — this is critical: without the conversion, the ISS orbit appears as a fixed ring around the globe because inertial positions don't track Earth's rotation
-3. Uses `LagrangePolynomialApproximation` so the four-minute NASA samples animate smoothly
-4. Optionally fetches Open Notify's current ISS snapshot on localhost to align the initial clock time
-
-If you see a browser CORS error after Step 6, your `vite.config.js` proxy block is missing or outdated. Re-copy the exact `vite.config.js` from Step 2 and restart `npm run dev`.
-
----
-
-## 6. Draw the live ISS orbit
-
-Replace `src/main.js` with:
-
-```js
-import {
-  ClockRange,
-  Color,
-  Ion,
-  JulianDate,
-  PolylineGlowMaterialProperty,
-  Viewer,
-} from 'cesium';
-import 'cesium/Build/Cesium/Widgets/widgets.css';
-import './style.css';
-import {
-  clampJulianDate,
-  fetchIssNowSnapshot,
-  loadIssTrajectory,
-} from './iss.js';
-
-const ORBIT_PERIOD_SECONDS = 93 * 60;
-const TIMELINE_WINDOW_SECONDS = 3 * 60 * 60;
-
-const token = import.meta.env.VITE_CESIUM_ION_TOKEN;
-if (!token || token === 'your_token_here') {
-  throw new Error(
-    'Missing VITE_CESIUM_ION_TOKEN. Copy .env.example to .env and add your token.'
+  const geodetic = eciToGeodetic(state.position, gstime(date));
+  return Cartesian3.fromRadians(
+    geodetic.longitude,
+    geodetic.latitude,
+    geodetic.height * 1000
   );
 }
-Ion.defaultAccessToken = token;
 
-const viewer = new Viewer('cesiumContainer', {
-  baseLayerPicker: false,
-  geocoder: false,
-  sceneModePicker: false,
-  navigationHelpButton: false,
-  homeButton: false,
-});
-
-const trajectory = await loadIssTrajectory();
-
-let liveSnapshot;
-try {
-  liveSnapshot = await fetchIssNowSnapshot();
-} catch (error) {
-  liveSnapshot = {
-    available: false,
-    reason: `Open Notify request failed: ${error.message}`,
-    source: 'Open Notify',
-  };
+function angularDistance(left, right) {
+  const leftUnit = Cartesian3.normalize(left, new Cartesian3());
+  const rightUnit = Cartesian3.normalize(right, new Cartesian3());
+  return Math.acos(
+    CesiumMath.clamp(Cartesian3.dot(leftUnit, rightUnit), -1, 1)
+  );
 }
 
-const preferredTime = liveSnapshot?.available
-  ? JulianDate.fromDate(new Date(liveSnapshot.timestamp * 1000))
-  : JulianDate.now();
+function rotationBetween(from, to) {
+  const fromUnit = Cartesian3.normalize(from, new Cartesian3());
+  const toUnit = Cartesian3.normalize(to, new Cartesian3());
+  const axis = Cartesian3.cross(fromUnit, toUnit, new Cartesian3());
+  const axisLength = Cartesian3.magnitude(axis);
 
-const currentTime = clampJulianDate(
-  preferredTime,
-  trajectory.startTime,
-  trajectory.stopTime
-);
+  if (axisLength < CesiumMath.EPSILON12) {
+    return Matrix3.clone(Matrix3.IDENTITY);
+  }
 
-viewer.clock.startTime = trajectory.startTime.clone();
-viewer.clock.stopTime = trajectory.stopTime.clone();
-viewer.clock.currentTime = currentTime.clone();
-viewer.clock.clockRange = ClockRange.CLAMPED;
-viewer.clock.multiplier = 1.0;
-viewer.clock.shouldAnimate = true;
+  Cartesian3.divideByScalar(axis, axisLength, axis);
+  const angle = angularDistance(fromUnit, toUnit);
+  const quaternion = Quaternion.fromAxisAngle(axis, angle);
+  return Matrix3.fromQuaternion(quaternion);
+}
 
-const timelineStart = clampJulianDate(
-  JulianDate.addSeconds(currentTime, -TIMELINE_WINDOW_SECONDS / 2, new JulianDate()),
-  trajectory.startTime,
-  trajectory.stopTime
-);
-const timelineStop = clampJulianDate(
-  JulianDate.addSeconds(currentTime, TIMELINE_WINDOW_SECONDS / 2, new JulianDate()),
-  trajectory.startTime,
-  trajectory.stopTime
-);
-viewer.timeline.zoomTo(timelineStart, timelineStop);
-
-viewer.entities.add({
-  id: 'iss',
-  name: 'ISS (ZARYA)',
-  position: trajectory.positions,
-  path: {
-    resolution: 120,
-    material: new PolylineGlowMaterialProperty({
-      glowPower: 0.2,
-      color: Color.CYAN,
-    }),
-    width: 8,
-    trailTime: ORBIT_PERIOD_SECONDS / 2,
-    leadTime: ORBIT_PERIOD_SECONDS / 2,
-  },
-});
+function cartographicHeight(position) {
+  return Cartographic.fromCartesian(position).height;
+}
 ```
 
-Now you should see a live ISS path based on NASA trajectory data, not a hardcoded TLE.
+### How the calibration works
 
----
+1. `satellite.js` propagates the latest CelesTrak TLE with SGP4.
+2. The code searches one ISS orbit for the phase that is closest to the verified
+   live Open Notify point.
+3. A single rotation aligns the propagated orbit with that live point.
+4. The code then creates a new, evenly spaced `SampledPositionProperty`.
 
-## 7. Attach a 3D ISS model from Cesium ion
+The live point is **not** added to a previously interpolated property. Doing
+that would create a large outlier and cause the path to cross the globe,
+altitudes near 900 km, and speeds above 100 km/s.
 
-### Step 7a — Download the ISS model from Sketchfab
+## 6. Upload the ISS model to Cesium ion
 
-1. Go to the ISS model page: https://sketchfab.com/3d-models/3december-2021-international-space-station-a91871ba086749a492c12976cdcf321b
-2. Click **Download 3D Model** (you need a free Sketchfab account — sign up if you haven't)
-3. Choose **glTF** as the download format
-4. Unzip the downloaded file — you'll have a folder containing a `.gltf` file and supporting textures
+1. Sign in to [Cesium ion](https://ion.cesium.com/).
+2. Open **Assets** and select **Add data**.
+3. Upload the ISS `.gltf` or `.glb` file.
+4. Choose the model option, not 3D Tiles.
+5. Finish the upload and wait for processing.
+6. Open the asset and copy the numeric **Asset ID** from its details or URL.
 
-> **Can't find the Download button?** You must be logged in to Sketchfab. The button appears on the right side of the model page once signed in.
->
-> **Automation note:** Sketchfab can show anti-bot/CAPTCHA checks in automated environments. If that happens, complete this download manually in your normal browser session.
+An ion **asset ID** is not your access token:
 
-### Step 7b — Upload to Cesium ion
+- The token stays in `.env`.
+- The numeric ISS asset ID goes in `src/main.js`.
 
-1. Go to **My Assets** in Cesium ion: https://ion.cesium.com/myassets
-2. Click **Add data** → **Upload files**
-3. Drag the entire unzipped model folder (or select all files inside it) and upload
-4. Wait for processing to complete (usually a minute or two)
-5. Copy the **Asset ID** shown on the asset detail page (a number like `1234567`)
+## 7. Create the Cesium viewer and ISS entity
 
-> **If Sketchfab download is temporarily blocked:** You can still validate all downstream Cesium ion upload + app wiring steps with any local glTF model folder (a `.gltf` plus its textures/buffers). Then swap to the ISS model once Sketchfab access works.
-
-### Step 7c — Wire the ion model into the live tracker
-
-Before you run this step: **you must paste your own uploaded model's ion Asset ID into `src/main.js`**.
-
-Put it in this exact line (replace `0` with your numeric ID from ion, for example `1234567`):
-
-```js
-const ISS_ION_ASSET_ID = 1234567;
-```
-
-This line appears just before the model validation and `IonResource.fromAssetId(...)` call in the full snippet below.
-
-Then replace `src/main.js` with this full version:
+Create `src/main.js`:
 
 ```js
 import {
@@ -576,14 +509,15 @@ import {
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import './style.css';
 import {
-  clampJulianDate,
-  fetchIssNowSnapshot,
-  loadIssTrajectory,
-  NASA_OEM_URL,
+  CELESTRAK_TLE_URL,
+  loadIssData,
+  OPEN_NOTIFY_URL,
 } from './iss.js';
 
+// Replace this number with the Asset ID shown on your ISS model's ion page.
+// Do not paste your ion access token here.
+const ISS_ION_ASSET_ID = 5085257;
 const ORBIT_PERIOD_SECONDS = 93 * 60;
-const TIMELINE_WINDOW_SECONDS = 3 * 60 * 60;
 
 const token = import.meta.env.VITE_CESIUM_ION_TOKEN;
 if (!token || token === 'your_token_here') {
@@ -596,149 +530,128 @@ Ion.defaultAccessToken = token;
 const viewer = new Viewer('cesiumContainer', {
   baseLayerPicker: false,
   geocoder: false,
-  sceneModePicker: false,
-  navigationHelpButton: false,
   homeButton: false,
+  navigationHelpButton: false,
+  sceneModePicker: false,
 });
 
-const trajectory = await loadIssTrajectory();
-
-let liveSnapshot;
-try {
-  liveSnapshot = await fetchIssNowSnapshot();
-} catch (error) {
-  liveSnapshot = {
-    available: false,
-    reason: `Open Notify request failed: ${error.message}`,
-    source: 'Open Notify',
-  };
-}
-
-const preferredTime = liveSnapshot?.available
-  ? JulianDate.fromDate(new Date(liveSnapshot.timestamp * 1000))
-  : JulianDate.now();
-
-const currentTime = clampJulianDate(
-  preferredTime,
-  trajectory.startTime,
-  trajectory.stopTime
+const trajectory = await loadIssData();
+const currentTime = JulianDate.fromDate(
+  new Date(trajectory.live.timestamp * 1000)
 );
 
-const clock = viewer.clock;
-clock.startTime = trajectory.startTime.clone();
-clock.stopTime = trajectory.stopTime.clone();
-clock.currentTime = currentTime.clone();
-clock.clockRange = ClockRange.CLAMPED;
-clock.multiplier = 1.0;
-clock.shouldAnimate = true;
-
-const timelineStart = clampJulianDate(
-  JulianDate.addSeconds(currentTime, -TIMELINE_WINDOW_SECONDS / 2, new JulianDate()),
-  trajectory.startTime,
-  trajectory.stopTime
-);
-const timelineStop = clampJulianDate(
-  JulianDate.addSeconds(currentTime, TIMELINE_WINDOW_SECONDS / 2, new JulianDate()),
-  trajectory.startTime,
-  trajectory.stopTime
-);
-viewer.timeline.zoomTo(timelineStart, timelineStop);
-
-const ISS_ION_ASSET_ID = 0; // PASTE YOUR ION ASSET ID HERE (replace 0)
-if (!Number.isInteger(ISS_ION_ASSET_ID) || ISS_ION_ASSET_ID <= 0) {
-  throw new Error(
-    'Set ISS_ION_ASSET_ID to your uploaded model asset ID from ion before running.'
-  );
-}
+configureClock(viewer, trajectory, currentTime);
 
 await assertIonModelAsset(ISS_ION_ASSET_ID, token);
-const issModelUri = await IonResource.fromAssetId(ISS_ION_ASSET_ID);
+const modelUri = await IonResource.fromAssetId(ISS_ION_ASSET_ID);
 
 const iss = viewer.entities.add({
   id: 'iss',
-  name: 'ISS (ZARYA)',
+  name: trajectory.name,
   position: trajectory.positions,
   orientation: new VelocityOrientationProperty(trajectory.positions),
   model: {
-    uri: issModelUri,
+    uri: modelUri,
     minimumPixelSize: 96,
-    maximumScale: 50_000.0,
+    maximumScale: 50_000,
   },
   path: {
-    resolution: 120,
+    resolution: 15,
     material: new PolylineGlowMaterialProperty({
-      glowPower: 0.2,
       color: Color.CYAN,
+      glowPower: 0.2,
     }),
-    width: 8,
-    trailTime: ORBIT_PERIOD_SECONDS / 2,
+    width: 6,
     leadTime: ORBIT_PERIOD_SECONDS / 2,
+    trailTime: ORBIT_PERIOD_SECONDS / 2,
   },
 });
 
-// Camera safety fix:
-// We intentionally avoid viewer.trackedEntity here because some model assets
-// can trigger a camera normalization error on initial track/fly.
-// Instead, we manually place the camera using the sampled ISS position.
-const issCurrent = trajectory.positions.getValue(currentTime);
-if (issCurrent) {
+addDescription(iss, trajectory);
+viewer.selectedEntity = iss;
+
+const currentPosition = trajectory.positions.getValue(currentTime);
+if (currentPosition) {
   viewer.camera.flyTo({
     destination: Cartesian3.multiplyByScalar(
-      issCurrent,
+      currentPosition,
       1.5,
       new Cartesian3()
     ),
-    duration: 0.0,
+    duration: 0,
   });
 }
 
-const scratchCurrent = new Cartesian3();
-const scratchNext = new Cartesian3();
-const scratchCarto = new Cartographic();
-const scratchJulianDate = new JulianDate();
+function configureClock(cesiumViewer, data, now) {
+  cesiumViewer.clock.startTime = data.startTime.clone();
+  cesiumViewer.clock.stopTime = data.stopTime.clone();
+  cesiumViewer.clock.currentTime = now.clone();
+  cesiumViewer.clock.clockRange = ClockRange.CLAMPED;
+  cesiumViewer.clock.multiplier = 1;
+  cesiumViewer.clock.shouldAnimate = true;
 
-iss.description = new CallbackProperty((time) => {
-  const current = trajectory.positions.getValue(time, scratchCurrent);
-  if (!current) return '';
+  const timelineStart = JulianDate.addSeconds(
+    now,
+    -ORBIT_PERIOD_SECONDS / 2,
+    new JulianDate()
+  );
+  const timelineStop = JulianDate.addSeconds(
+    now,
+    ORBIT_PERIOD_SECONDS / 2,
+    new JulianDate()
+  );
+  cesiumViewer.timeline.zoomTo(timelineStart, timelineStop);
+}
 
-  Cartographic.fromCartesian(current, undefined, scratchCarto);
-  const lat = CesiumMath.toDegrees(scratchCarto.latitude).toFixed(3);
-  const lon = CesiumMath.toDegrees(scratchCarto.longitude).toFixed(3);
-  const altKm = (scratchCarto.height / 1000).toFixed(1);
+function addDescription(entity, data) {
+  const currentScratch = new Cartesian3();
+  const nextScratch = new Cartesian3();
+  const cartographicScratch = new Cartographic();
+  const nextTimeScratch = new JulianDate();
 
-  const oneSecondLater = JulianDate.addSeconds(time, 1.0, scratchJulianDate);
-  const next = trajectory.positions.getValue(oneSecondLater, scratchNext);
-  const speedKmS = next
-    ? (Cartesian3.distance(current, next) / 1000).toFixed(2)
-    : '—';
+  entity.description = new CallbackProperty((time) => {
+    const current = data.positions.getValue(time, currentScratch);
+    if (!current) return '';
 
-  const liveSnapshotRow = liveSnapshot?.available
-    ? `${liveSnapshot.latitude.toFixed(3)}°, ${liveSnapshot.longitude.toFixed(3)}° @ ${new Date(
-        liveSnapshot.timestamp * 1000
-      ).toUTCString()}`
-    : liveSnapshot?.reason ?? 'Unavailable';
+    Cartographic.fromCartesian(current, undefined, cartographicScratch);
+    const latitude = CesiumMath.toDegrees(
+      cartographicScratch.latitude
+    ).toFixed(3);
+    const longitude = CesiumMath.toDegrees(
+      cartographicScratch.longitude
+    ).toFixed(3);
+    const altitudeKm = (cartographicScratch.height / 1000).toFixed(1);
 
-  return `
-    <table class="cesium-infoBox-defaultTable">
-      <tr><th>Latitude</th><td>${lat}°</td></tr>
-      <tr><th>Longitude</th><td>${lon}°</td></tr>
-      <tr><th>Altitude</th><td>${altKm} km</td></tr>
-      <tr><th>Speed</th><td>${speedKmS} km/s</td></tr>
-      <tr><th>Trajectory source</th><td><a href="${NASA_OEM_URL}" target="_blank" rel="noreferrer">NASA OEM</a></td></tr>
-      <tr><th>NASA sample count</th><td>${trajectory.sampleCount}</td></tr>
-      <tr><th>Open Notify</th><td>${liveSnapshotRow}</td></tr>
-    </table>
-  `;
-}, false);
+    const nextTime = JulianDate.addSeconds(time, 1, nextTimeScratch);
+    const next = data.positions.getValue(nextTime, nextScratch);
+    const speedKmS = next
+      ? (Cartesian3.distance(current, next) / 1000).toFixed(2)
+      : '—';
 
-viewer.selectedEntity = iss;
+    return `
+      <table class="cesium-infoBox-defaultTable">
+        <tr><th>Latitude</th><td>${latitude}°</td></tr>
+        <tr><th>Longitude</th><td>${longitude}°</td></tr>
+        <tr><th>Altitude</th><td>${altitudeKm} km</td></tr>
+        <tr><th>Speed</th><td>${speedKmS} km/s</td></tr>
+        <tr><th>Live anchor</th><td><a href="${OPEN_NOTIFY_URL}" target="_blank" rel="noreferrer">Open Notify</a></td></tr>
+        <tr><th>Orbit model</th><td><a href="${CELESTRAK_TLE_URL}" target="_blank" rel="noreferrer">CelesTrak TLE + SGP4</a></td></tr>
+        <tr><th>Orbit samples</th><td>${data.sampleCount}</td></tr>
+      </table>
+    `;
+  }, false);
+}
 
 async function assertIonModelAsset(assetId, accessToken) {
+  if (!Number.isInteger(assetId) || assetId <= 0) {
+    throw new Error('ISS_ION_ASSET_ID must be a positive integer.');
+  }
+
   const endpointUrl =
     `https://api.cesium.com/v1/assets/${assetId}/endpoint?access_token=` +
     encodeURIComponent(accessToken);
-
   const response = await fetch(endpointUrl);
+
   if (!response.ok) {
     throw new Error(
       `Failed to inspect ion asset ${assetId} (${response.status} ${response.statusText}).`
@@ -748,66 +661,114 @@ async function assertIonModelAsset(assetId, accessToken) {
   const endpoint = await response.json();
   if (endpoint.type === '3DTILES') {
     throw new Error(
-      `ion asset ${assetId} is a 3D Tiles asset. For entity.model.uri, upload a glTF/GLB model asset and use that asset ID instead.`
+      `ion asset ${assetId} is 3D Tiles. Upload the ISS as a glTF/GLB model instead.`
     );
   }
 }
 ```
 
-At this point, your app is complete.
+At the beginning of this file, find:
 
-> Camera tracking note: if you previously used `viewer.trackedEntity = iss`
-> and saw `DeveloperError: normalized result is not a number`, keep this
-> manual `camera.flyTo` pattern instead.
-
----
-
-## 8. How to test your result
-
-You should be able to:
-1. See Earth and a glowing ISS path
-2. See the ISS model moving along that path after you provide a valid ion model asset ID
-3. Use the Cesium timeline controls to scrub around the current orbit window
-4. Click the ISS and see live telemetry plus the NASA/Open Notify source details in the info box
-
----
-
-## 9. Build for production
-
-**Windows (PowerShell):**
-```powershell
-npm run build
-npm run preview
+```js
+const ISS_ION_ASSET_ID = 5085257;
 ```
 
-**macOS / Linux:**
+Replace only `5085257` with your own ISS model asset ID when following the
+tutorial with a different ion asset. Leave the semicolon in place.
+
+## 8. Run the app
+
+Start Vite:
+
+```bash
+npm run dev
+```
+
+Open the local URL printed in the terminal, normally:
+
+<http://localhost:5173/>
+
+You should see:
+
+- a Cesium globe;
+- the ISS model near its verified live position;
+- one smooth cyan orbit with no sharp jumps or lines through Earth;
+- an altitude near 400–450 km;
+- a speed near 7–8 km/s; and
+- an info box identifying Open Notify and CelesTrak/SGP4.
+
+To create a production build:
+
 ```bash
 npm run build
-npm run preview
 ```
 
-The `dist/` folder is static and can be hosted on GitHub Pages, Netlify, Cloudflare Pages, or S3.
+## Troubleshooting
 
-> Important: Open Notify is HTTP-only, so that part of the demo works on `http://localhost` but not on HTTPS-hosted deployments. The deployed app still uses NASA's HTTPS trajectory data.
+### The page is blank
 
----
+Open the browser developer console. The first red error usually identifies the
+missing token, bad asset ID, proxy failure, or dependency mismatch.
 
-## 10. Common beginner issues
+### Missing `VITE_CESIUM_ION_TOKEN`
 
-1. **Blank/failed load**: Check `.env` token and restart the dev server after editing env vars
-2. **zip-no-worker.js error**: Re-run `npm install` after replacing `package.json` so the `overrides` entry takes effect
-3. **Model not appearing**: Confirm `ISS_ION_ASSET_ID` is a model asset in your ion account and that processing finished
-4. **Asset renders as a yellow point but not a model**: Your ion asset is probably a `3DTILES` asset; upload a glTF/GLB model asset instead
-5. **Open Notify unavailable**: That is expected on HTTPS deployments because the API is HTTP-only; localhost still works
-6. **Path not moving**: Confirm `viewer.clock.shouldAnimate = true`
-7. **`normalized result is not a number` camera error**: Do not use `viewer.trackedEntity = iss` for startup; use the guarded manual `viewer.camera.flyTo(...)` block from Step 7c
-8. **`Access to fetch ... has been blocked by CORS policy` (NASA OEM)**: Ensure your `vite.config.js` contains the `/api/nasa-iss-oem` proxy block from Step 2, then restart the dev server
+Confirm:
 
----
+1. The file is named exactly `.env`.
+2. It is in the project root beside `package.json`.
+3. It contains `VITE_CESIUM_ION_TOKEN=...`.
+4. You restarted Vite after editing it.
 
-## 11. Next extensions (optional)
+Never put the real token in `.env.example`.
 
-1. Add a small UI badge showing whether Open Notify is active or skipped
-2. Add a second entity for another spacecraft using the same NASA OEM parsing pattern
-3. Add camera presets (far orbit view, close chase view, nadir view)
-4. Add day/night lighting and atmosphere tuning
+### The ISS appears as a yellow point
+
+The model did not load. Confirm the asset:
+
+- is a glTF or GLB model, not 3D Tiles;
+- finished processing in Cesium ion;
+- uses the asset ID from the ion asset page; and
+- is accessible to the token in `.env`.
+
+### The path has spikes or impossible speeds
+
+Do not add a live `Cartesian3` sample to an already-created higher-degree
+interpolated trajectory. Use the complete `src/iss.js` from Step 5. A healthy
+ISS speed is approximately 7.7 km/s, not 100+ km/s.
+
+### `zip-no-worker.js` or `mersenne-twister` errors
+
+Use the exact dependency versions and `overrides` block from Step 1, then clean
+and reinstall:
+
+**Windows PowerShell**
+
+```powershell
+Remove-Item -Recurse -Force node_modules
+Remove-Item package-lock.json
+npm install
+```
+
+**macOS or Linux**
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+```
+
+### Data requests return 404 or CORS errors
+
+Copy the complete `vite.config.js` from Step 2 and restart Vite. Both
+`/api/iss-tle` and `/api/iss-now` must be configured.
+
+## What you learned
+
+You used:
+
+- `Viewer` to create a Cesium application;
+- `SampledPositionProperty` for time-dynamic positions;
+- `VelocityOrientationProperty` to orient a moving model;
+- Cesium's clock and timeline for animation;
+- `IonResource.fromAssetId` to load a private ion-hosted model;
+- satellite.js and SGP4 for orbit propagation; and
+- a live observation to calibrate a smooth trajectory without corrupting it.
